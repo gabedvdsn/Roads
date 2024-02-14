@@ -1,51 +1,72 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
-using System.Security.Cryptography;
-using AYellowpaper.SerializedCollections;
-using Cinemachine;
 using Unity.VisualScripting;
 using UnityEngine;
-using UnityEngine.Assertions;
 using UnityEngine.Serialization;
 using Random = UnityEngine.Random;
-using UnityEngine.UI;
 
 public class RoadGeneration : MonoBehaviour
 {
+    
     [Header("Simulation Info")] 
-    [SerializeField] private bool useIterativeDepth;
+    // If neither bool is true, use both square and diagonal roads
+    [SerializeField] private bool useOnlySquareRoads;
+    [SerializeField] private bool useOnlyDiagonalRoads;
     
     [Header("Road Info")]
-    [SerializeField] private List<RoadData> roadDatas;
+    [SerializeField] private List<RoadData> squareRoadDatas;
+    [Space]
+    [SerializeField] private List<RoadData> diagonalRoadDatas;
+    [SerializeField] private List<RoadData> diagonalCornerRoadDatas;
+
+    private List<RoadData> allRoadDatas;
+    
     private int generationDepth;
-    private float minGenerationMagnitude;
-    private float maxGenerationMagnitude;
+    private float generationMagnitude;
 
     [Header("UI Info")] 
     [SerializeField] private TMPro.TMP_InputField generationDepthField;
-    [SerializeField] private TMPro.TMP_InputField minGenerationMagnitudeField;
-    [SerializeField] private TMPro.TMP_InputField maxGenerationMagnitudeField;
+    [FormerlySerializedAs("maxGenerationMagnitudeField")] [SerializeField] private TMPro.TMP_InputField generationMagnitudeField;
 
     private RoadSystem roadSystem;
     private Dictionary<RoadData, Dictionary<string, List<RoadData>>> connectionsByAxis;
 
     public readonly string[] terminalRoads =
     {
+        // Square terminals
         "Up",
         "Down",
         "Left",
-        "Right"
+        "Right",
+        // Diagonal terminals
+        "UpRight",
+        "UpLeft",
+        "DownRight",
+        "DownLeft"
     };
 
     private readonly string[] validAxes =
     {
+        // Square axes
         "up",
         "down",
         "left",
-        "right"
+        "right",
+        // Diagonal axes
+        "upright",
+        "upleft",
+        "downright",
+        "downleft"
+    };
+
+    // Separate array of diagonal axes for corners
+    private readonly string[] diagonalAxes =
+    {
+        "upright",
+        "upleft",
+        "downright",
+        "downleft"
     };
     
     // Start is called before the first frame update
@@ -53,14 +74,27 @@ public class RoadGeneration : MonoBehaviour
     {
         roadSystem = new RoadSystem();
         
+        CreateRoadDatas();
         CreateConnectionsByAxis();
     }
 
+    #region Setup
+    void CreateRoadDatas()
+    {
+        allRoadDatas = new List<RoadData>();
+        
+        if (!useOnlyDiagonalRoads && !useOnlyDiagonalRoads) allRoadDatas = squareRoadDatas.Concat(diagonalRoadDatas).ToList();
+        else if (useOnlySquareRoads && !useOnlyDiagonalRoads) allRoadDatas = squareRoadDatas;
+        else if (useOnlyDiagonalRoads && !useOnlyDiagonalRoads) allRoadDatas = diagonalRoadDatas;
+        
+        // In the case that both flags are true, allRoadDatas remains empty
+    }
+    
     void CreateConnectionsByAxis()
     {
         connectionsByAxis = new Dictionary<RoadData, Dictionary<string, List<RoadData>>>();
         
-        foreach (RoadData thisRoadData in roadDatas)
+        foreach (RoadData thisRoadData in allRoadDatas)
         {
             connectionsByAxis[thisRoadData] = new Dictionary<string, List<RoadData>>();
             
@@ -68,52 +102,144 @@ public class RoadGeneration : MonoBehaviour
             {
                 connectionsByAxis[thisRoadData][thisAxis] = new List<RoadData>();
 
-                foreach (var otherRoadData in roadDatas.Where(otherRoadData => otherRoadData.axes.Contains(GetOpposingAxis(thisAxis))))
+                foreach (var otherRoadData in allRoadDatas.Where(otherRoadData => otherRoadData.axes.Contains(GetOpposingAxis(thisAxis))))
                 {
                     connectionsByAxis[thisRoadData][thisAxis].Add(otherRoadData);
                 }
             }
         }
     }
+    
+    #endregion
 
+    #region Simulation
+    
     void DoSimulation()
     {
         GetGenerationDepthFromField();
-        GetMinGenerationMagnitudeFromField();
-        GetMaxGenerationMagnitudeFromField();
+        GetGenerationMagnitude();
         
         GenerateStart();
         
+        Debug.Log($"Generation Depth => {generationDepth * generationMagnitude}");
+        
         // Do generation
+        for (int _ = 0; _ < generationDepth; ++_) GenerateRoads();
         
-        // Iterative
-        if (useIterativeDepth)
-        {
-            for (int _ = 0; _ < generationDepth; ++_)
-            {
-                GenerateRoads();
-            }
-        }
-        // Incremental
-        else
-        {
-            while (roadSystem.GetSize() < generationDepth * maxGenerationMagnitude) GenerateRoads();
-        }
-        
-        // Close all remaining non-terminal roads
+        // Close all remaining non-terminal roads with terminal roads
         TerminateAllRoads();
-
-        if (!(generationDepth * minGenerationMagnitude < roadSystem.GetSize() &&
-             roadSystem.GetSize() < generationDepth * maxGenerationMagnitude))
-        {
-            OnClickReset();
-            return;
-        }
         
         Debug.Log($"Roads in system: => {roadSystem.GetSize()}");
     }
+    
+    void GenerateStart()
+    {
+        RoadData roadData = FindRoad(terminalRoads[Random.Range(0, terminalRoads.Length)]);
 
-    RoadData FindRoad(string _name) => roadDatas.FirstOrDefault(data => data.roadName == _name);
+        if (roadData is null) return;
+        
+        GameObject go = Instantiate(roadData.prefab, transform);
+        
+        Road startRoad = go.GetComponent<Road>();
+        startRoad.Initialize(0, 0);
+        
+        roadSystem.AddAt(go.GetComponent<Road>(), 0, 0);
+
+        // Generate off of startRoad manually
+        List<RoadPacket> validConnections = GetValidConnectionRoadsFor(go.GetComponent<Road>());
+        RoadPacket packet = GetSomeNonTerminalRoadPacket(validConnections);
+
+        InstantiateRoad(startRoad, packet);
+
+    }
+
+    void GenerateRoads()
+    {
+        foreach (Road _road in roadSystem.GetAllFreeNonTerminalRoads(this))
+        {
+            if (roadSystem.GetSize() >= generationDepth * generationMagnitude) return;
+            
+            List<RoadPacket> validConnections = GetValidConnectionRoadsFor(_road);
+            
+            if (validConnections.Count == 0) continue;  // exceedingly rare case when neighboring roads on all axes need to connect (just haven't made this art yet lol)
+
+            InstantiateRoad(_road, GetSomeNonTerminalRoadPacket(validConnections));
+        }
+    }
+    
+    void TerminateAllRoads()
+    {
+        bool reTerminate = false;
+        
+        foreach (Road _road in roadSystem.GetAllFreeNonTerminalRoads(this))
+        {
+            int[] position = _road.GetPosition();
+            
+            foreach (string axis in _road.GetData().axes)
+            {
+                int[] offsetPosition =
+                {
+                    position[0] + AxisToOffset(axis, 'x'),
+                    position[1] + AxisToOffset(axis, 'y')
+                };
+                
+                // If road exists at offset position, continue
+                if (roadSystem.RoadExistsAt(offsetPosition[0], offsetPosition[1])) continue;
+                
+                RoadData terminalData = GetTerminalForAxis(axis);
+                
+                // Check if terminal is valid there
+                if (PotentialRoadIsValidAtPosition(terminalData, offsetPosition[0], offsetPosition[1]))
+                {
+                    // The terminal is valid, let's create it
+                    RoadPacket packet = new RoadPacket(offsetPosition[0], offsetPosition[1], axis, GetTerminalForAxis(axis));
+                    InstantiateRoad(_road, packet);
+                }
+                else
+                {
+                    // The terminal is invalid, create any valid road instead
+                    List<RoadPacket> validConnectionRoads = GetValidConnectionRoadsFor(_road);
+
+                    if (validConnectionRoads.Count == 0) continue;  // exceedingly rare case when neighboring roads on all axes need to connect
+                    
+                    InstantiateRoad(_road, validConnectionRoads[Random.Range(0, validConnectionRoads.Count)]);
+                    
+                    // Non-terminal is created
+                    reTerminate = true;
+                }
+            }
+        }
+        
+        if (reTerminate) TerminateAllRoads();
+    }
+    
+    void InstantiateRoad(Road currRoad, RoadPacket roadPacket)
+    {
+        GameObject go = Instantiate(roadPacket.roadData.prefab, 
+            GetConnectionPosOnAxis(currRoad, roadPacket.roadData.prefab, roadPacket.axis), 
+            Quaternion.identity, 
+            transform);
+        
+        go.GetComponent<Road>().Initialize(roadPacket.x, roadPacket.y);
+        
+        roadSystem.AddAt(go.GetComponent<Road>(), roadPacket.x, roadPacket.y);
+        
+        if (roadPacket.requiresCorners) InstantiateCornerRoads();
+    }
+    
+    void InstantiateCornerRoads() { }
+    
+    void DestroyAllRoadsInSystem()
+    {
+        // foreach (Road _road in roadSystem.GetAllFreeNonTerminalRoads(this, includeTerminals: true)) Destroy(_road);
+        for (int i = 0; i < transform.childCount; ++i) Destroy(transform.GetChild(i).gameObject);
+    }
+
+    #endregion
+    
+    #region Calculation
+    
+    RoadData FindRoad(string _name) => allRoadDatas.FirstOrDefault(data => data.roadName == _name);
 
     List<RoadPacket> GetValidConnectionRoadsFor(Road _road)
     {
@@ -209,40 +335,6 @@ public class RoadGeneration : MonoBehaviour
 
     public bool RoadIsTerminal(RoadData _roadData) => terminalRoads.Contains(_roadData.roadName);
     
-    void GenerateStart()
-    {
-        RoadData roadData = FindRoad(terminalRoads[Random.Range(0, terminalRoads.Length)]);
-
-        if (roadData is null) return;
-        
-        GameObject go = Instantiate(roadData.prefab, transform);
-        
-        Road startRoad = go.GetComponent<Road>();
-        startRoad.Initialize(0, 0);
-        
-        roadSystem.AddAt(go.GetComponent<Road>(), 0, 0);
-
-        // Generate off of startRoad manually
-        List<RoadPacket> validConnections = GetValidConnectionRoadsFor(go.GetComponent<Road>());
-        RoadPacket packet = GetSomeNonTerminalRoadPacket(validConnections);
-
-        InstantiateRoad(startRoad, packet);
-
-    }
-
-    void GenerateRoads()
-    {
-        foreach (Road _road in roadSystem.GetAllFreeNonTerminalRoads(this))
-        {
-            // Debug.Log($"Road to build off of => {_road}");
-            List<RoadPacket> validConnections = GetValidConnectionRoadsFor(_road);
-            
-            if (validConnections.Count == 0) continue;  // exceedingly rare case when neighboring roads on all axes need to connect (just haven't made this art yet lol)
-
-            InstantiateRoad(_road, GetSomeNonTerminalRoadPacket(validConnections));
-        }
-    }
-
     RoadPacket GetSomeNonTerminalRoadPacket(List<RoadPacket> validConnections)
     {
         RoadPacket packet = validConnections[Random.Range(0, validConnections.Count)];
@@ -260,75 +352,14 @@ public class RoadGeneration : MonoBehaviour
         return packet;
     }
 
-    void TerminateAllRoads()
-    {
-        bool reTerminate = false;
-        
-        // bug check neighboring roads, if they connect via opposing axis then use valid connection road instead of terminal (but should only connects via available axes)
-        foreach (Road _road in roadSystem.GetAllFreeNonTerminalRoads(this))
-        {
-            int[] position = _road.GetPosition();
-            
-            foreach (string axis in _road.GetData().axes)
-            {
-                int[] offsetPosition =
-                {
-                    position[0] + AxisToOffset(axis, 'x'),
-                    position[1] + AxisToOffset(axis, 'y')
-                };
-                
-                // If road exists at offset position, continue
-                if (roadSystem.RoadExistsAt(offsetPosition[0], offsetPosition[1])) continue;
-                
-                RoadData terminalData = GetTerminalForAxis(axis);
-                
-                // Check if terminal is valid there
-                if (PotentialRoadIsValidAtPosition(terminalData, offsetPosition[0], offsetPosition[1]))
-                {
-                    // The terminal is valid, let's create it
-                    RoadPacket packet = new RoadPacket(offsetPosition[0], offsetPosition[1], axis, GetTerminalForAxis(axis));
-                    InstantiateRoad(_road, packet);
-                }
-                else
-                {
-                    // The terminal is invalid, create any valid road instead
-                    List<RoadPacket> validConnectionRoads = GetValidConnectionRoadsFor(_road);
-
-                    if (validConnectionRoads.Count == 0) continue;  // exceedingly rare case when neighboring roads on all axes need to connect
-                    
-                    InstantiateRoad(_road, validConnectionRoads[Random.Range(0, validConnectionRoads.Count)]);
-                    
-                    // Non-terminal is created
-                    reTerminate = true;
-                }
-            }
-        }
-        
-        if (reTerminate) TerminateAllRoads();
-    }
-
     RoadData GetTerminalForAxis(string axis) => FindRoad(GetOpposingAxis(axis).FirstCharacterToUpper());
-
-    void InstantiateRoad(Road currRoad, RoadPacket roadPacket)
-    {
-        GameObject go = Instantiate(roadPacket.roadData.prefab, 
-            GetConnectionPosOnAxis(currRoad, roadPacket.roadData.prefab, roadPacket.axis), 
-            Quaternion.identity, 
-            transform);
-        
-        go.GetComponent<Road>().Initialize(roadPacket.x, roadPacket.y);
-        
-        // Debug.Log($"Building => {go}");
-        
-        roadSystem.AddAt(go.GetComponent<Road>(), roadPacket.x, roadPacket.y);
-    }
 
     Vector3 GetConnectionPosOnAxis(Road currRoad, GameObject nextPrefab, string axis)
     {
         Vector3 currPosition = currRoad.transform.position;
         
-        Sprite thisSprite = currRoad.GetData().prefab.GetComponentInChildren<SpriteRenderer>().sprite;
-        Sprite nextSprite = nextPrefab.GetComponentInChildren<SpriteRenderer>().sprite;
+        Sprite thisSprite = currRoad.GetData().prefab.GetComponent<SpriteRenderer>().sprite;
+        Sprite nextSprite = nextPrefab.GetComponent<SpriteRenderer>().sprite;
 
         return axis switch
         {
@@ -340,38 +371,42 @@ public class RoadGeneration : MonoBehaviour
         };
     }
 
-    Vector3 GetLeftConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite nextSprite)
+    Vector3 GetLeftConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite otherSprite)
     {
         return thisPosition + new Vector3(
-            -(thisSprite.textureRect.width / thisSprite.pixelsPerUnit / 2 + nextSprite.textureRect.width / nextSprite.pixelsPerUnit / 2),
+            -(thisSprite.textureRect.width / thisSprite.pixelsPerUnit / 2 + otherSprite.textureRect.width / otherSprite.pixelsPerUnit / 2),
             transform.position.y,
             0);
     }
     
-    Vector3 GetRightConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite nextSprite)
+    Vector3 GetRightConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite otherSprite)
     {
         return thisPosition + new Vector3(
-            thisSprite.textureRect.width / thisSprite.pixelsPerUnit / 2 + nextSprite.textureRect.width / nextSprite.pixelsPerUnit / 2,
+            thisSprite.textureRect.width / thisSprite.pixelsPerUnit / 2 + otherSprite.textureRect.width / otherSprite.pixelsPerUnit / 2,
             transform.position.y,
             0);
     }
     
-    Vector3 GetUpConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite nextSprite)
+    Vector3 GetUpConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite otherSprite)
     {
         return thisPosition + new Vector3(
             transform.position.x,
-            thisSprite.textureRect.height / thisSprite.pixelsPerUnit / 2 + nextSprite.textureRect.height / nextSprite.pixelsPerUnit / 2,
+            thisSprite.textureRect.height / thisSprite.pixelsPerUnit / 2 + otherSprite.textureRect.height / otherSprite.pixelsPerUnit / 2,
             0);
     }
     
-    Vector3 GetDownConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite nextSprite)
+    Vector3 GetDownConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite otherSprite)
     {
         return thisPosition + new Vector3(
             transform.position.x,
-            -(thisSprite.textureRect.height / thisSprite.pixelsPerUnit / 2 + nextSprite.textureRect.height / nextSprite.pixelsPerUnit / 2),
+            -(thisSprite.textureRect.height / thisSprite.pixelsPerUnit / 2 + otherSprite.textureRect.height / otherSprite.pixelsPerUnit / 2),
             0);
     }
-
+    
+    #endregion
+    
+    #region Editor
+    
     public void OnClickReset()
     {
         DestroyAllRoadsInSystem();
@@ -383,16 +418,14 @@ public class RoadGeneration : MonoBehaviour
 
     public void GetGenerationDepthFromField() => int.TryParse(generationDepthField.text, out generationDepth);
     
-    public void GetMinGenerationMagnitudeFromField() => float.TryParse(minGenerationMagnitudeField.text, out minGenerationMagnitude);
-    
-    public void GetMaxGenerationMagnitudeFromField() => float.TryParse(maxGenerationMagnitudeField.text, out maxGenerationMagnitude);
+    public void GetGenerationMagnitude() => float.TryParse(generationMagnitudeField.text, out generationMagnitude);
 
-    void DestroyAllRoadsInSystem()
+    private void OnValidate()
     {
-        // foreach (Road _road in roadSystem.GetAllFreeNonTerminalRoads(this, includeTerminals: true)) Destroy(_road);
-        for (int i = 0; i < transform.childCount; ++i) Destroy(transform.GetChild(i).gameObject);
+        if (useOnlyDiagonalRoads && useOnlyDiagonalRoads)
+            throw new Exception("Cannot use only square roads and only diagonal roads at once. Either leave both as 'false' or mark one as true");
     }
-
+    #endregion
 }
 
 public class RoadSystem
@@ -483,13 +516,15 @@ public struct RoadPacket
     public readonly int x, y;
     public readonly string axis;
     public readonly RoadData roadData;
+    public bool requiresCorners;
 
-    public RoadPacket(int _x, int _y, string _axis, RoadData _roadData)
+    public RoadPacket(int _x, int _y, string _axis, RoadData _roadData, bool _requiresCorners = false)
     {
         x = _x;
         y = _y;
         axis = _axis;
         roadData = _roadData;
+        requiresCorners = _requiresCorners;
     }
 
     public override string ToString()

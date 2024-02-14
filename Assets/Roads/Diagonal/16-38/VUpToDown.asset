@@ -1,0 +1,20 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 27863975d9fcac24892bafccb65e7f5f, type: 3}
+  m_Name: VUpToDown
+  m_EditorClassIdentifier: 
+  roadName: VUpToDown
+  axes:
+  - upleft
+  - upright
+  - down
+  prefab: {fileID: 981415989824664725, guid: 3ea10029c57a92044b8f9692c88dd8b0, type: 3}

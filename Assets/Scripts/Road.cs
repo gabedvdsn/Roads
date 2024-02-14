@@ -33,11 +33,6 @@ public class Road : MonoBehaviour
     public int[] GetPosition() => new[] { x, y };
 
     public RoadData GetData() => data;
-
-    public bool CompareName(string _name) => data.roadName == _name;
-
-    public override string ToString()
-    {
-        return gameObject.name;
-    }
+    
+    public override string ToString() => gameObject.name;
 }
