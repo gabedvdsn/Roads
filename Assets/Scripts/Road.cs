@@ -10,18 +10,6 @@ public class Road : MonoBehaviour
     [SerializeField] private RoadData data;
 
     private int x, y;
-    
-    // Start is called before the first frame update
-    void Start()
-    {
-        
-    }
-
-    // Update is called once per frame
-    void Update()
-    {
-        
-    }
 
     public void Initialize(int _x, int _y)
     {
@@ -35,4 +23,5 @@ public class Road : MonoBehaviour
     public RoadData GetData() => data;
     
     public override string ToString() => gameObject.name;
+    
 }

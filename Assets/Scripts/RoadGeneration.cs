@@ -15,14 +15,17 @@ public class RoadGeneration : MonoBehaviour
     [SerializeField] private bool useOnlyDiagonalRoads;
     
     [Header("Road Info")]
-    [SerializeField] private List<RoadData> squareRoadDatas;
+    [SerializeField] private RoadData[] squareRoadDatas;
+    [SerializeField] private RoadData[] squareTerminalDatas;
     [Space]
-    [SerializeField] private List<RoadData> diagonalRoadDatas;
-    [SerializeField] private List<RoadData> diagonalCornerRoadDatas;
+    [SerializeField] private RoadData[] diagonalRoadDatas;
+    [SerializeField] private RoadData[] diagonalCornerRoadDatas;
+    [SerializeField] private RoadData[] diagonalTerminalDatas;
 
-    private List<RoadData> allRoadDatas;
+
+    private RoadData[] allRoadDatas;
     private string[] validAxes;
-    private string[] validTerminals;
+    private RoadData[] validTerminals;
     
     private int generationDepth;
     private float generationMagnitude;
@@ -33,22 +36,6 @@ public class RoadGeneration : MonoBehaviour
 
     private RoadSystem roadSystem;
     private Dictionary<RoadData, Dictionary<string, List<RoadData>>> connectionsByAxis;
-
-    private readonly string[] squareTerminals =
-    {
-        "Up",
-        "Down",
-        "Left",
-        "Right"
-    };
-    
-    private readonly string[] diagonalTerminals =
-    {
-        "UpRight",
-        "UpLeft",
-        "DownRight",
-        "DownLeft"
-    };
 
     // Separate array of square axes
     private readonly string[] squareAxes =
@@ -73,33 +60,36 @@ public class RoadGeneration : MonoBehaviour
     {
         roadSystem = new RoadSystem();
         
-        CreateVariablesBySettings();
-        CreateConnectionsByAxis();
+        Setup();
     }
 
     #region Setup
+
+    void Setup()
+    {
+        CreateVariablesBySettings();
+        CreateConnectionsByAxis();
+    }
     
     void CreateVariablesBySettings()
     {
-        allRoadDatas = new List<RoadData>();
-
         if (!useOnlySquareRoads && !useOnlyDiagonalRoads)
         {
-            allRoadDatas = squareRoadDatas.Concat(diagonalRoadDatas).ToList();
+            allRoadDatas = squareRoadDatas.Concat(diagonalRoadDatas).ToArray();
             validAxes = squareAxes.Concat(diagonalAxes).ToArray();
-            validTerminals = squareTerminals.Concat(diagonalTerminals).ToArray();
+            validTerminals = squareTerminalDatas.Concat(diagonalTerminalDatas).ToArray();
         }
         else if (useOnlySquareRoads && !useOnlyDiagonalRoads)
         {
             allRoadDatas = squareRoadDatas;
             validAxes = squareAxes;
-            validTerminals = squareTerminals;
+            validTerminals = squareTerminalDatas;
         }
         else if (!useOnlySquareRoads && useOnlyDiagonalRoads)
         {
             allRoadDatas = diagonalRoadDatas;
             validAxes = diagonalAxes;
-            validTerminals = diagonalTerminals;
+            validTerminals = squareTerminalDatas;
         }
         
         // In the case that both flags are true, allRoadDatas remains empty
@@ -134,9 +124,9 @@ public class RoadGeneration : MonoBehaviour
         GetGenerationDepthFromField();
         GetGenerationMagnitude();
         
-        GenerateStart();
-        
         Debug.Log($"Generation Depth => {generationDepth * generationMagnitude}");
+        
+        GenerateStart();
         
         // Do generation
         for (int _ = 0; _ < generationDepth; ++_) GenerateRoads();
@@ -144,10 +134,10 @@ public class RoadGeneration : MonoBehaviour
         // Close all remaining non-terminal roads with terminal roads
         TerminateAllRoads();
         
-        Debug.Log($"Roads in system: => {roadSystem.GetSize()}");
+        Debug.Log($"Roads in system => {roadSystem.GetSize()}");
     }
     
-    void GenerateStart()
+    void GenerateStart(int startX = 0, int startY = 0)
     {
         RoadData roadData = GetTerminalForAxis(validAxes[Random.Range(0, validAxes.Length)]);
 
@@ -157,18 +147,28 @@ public class RoadGeneration : MonoBehaviour
             return;
         }
         
-        GameObject go = Instantiate(roadData.prefab, transform);
+        // Instantiate start road
+        Vector3 position = new Vector3(startX, startY, 0);
+        GameObject go = Instantiate(roadData.prefab, position, Quaternion.identity, transform);
         
+        // Initialize start road
         Road startRoad = go.GetComponent<Road>();
-        startRoad.Initialize(0, 0);
+        startRoad.Initialize(startX, startY);
+        
+        // Check if we need to add corners
+        if (diagonalRoadDatas.Contains(startRoad.GetData()))
+        {
+            PassableRoadPacket startPassableRoadPacket = new PassableRoadPacket(0, 0, startRoad.GetData().axes[0], startRoad.GetData(), true);
+            InstantiateCornerRoads(startRoad, startPassableRoadPacket);
+        }
         
         roadSystem.AddAt(go.GetComponent<Road>(), 0, 0);
 
         // Generate off of startRoad manually
-        List<RoadPacket> validConnections = GetValidConnectionRoadsFor(go.GetComponent<Road>());
-        RoadPacket packet = GetSomeNonTerminalRoadPacket(validConnections);
+        List<PassableRoadPacket> validConnections = GetValidConnectionRoadsFor(go.GetComponent<Road>());
+        PassableRoadPacket nextPassableRoadPacket = GetSomeNonTerminalRoadPacket(validConnections);
 
-        InstantiateRoad(startRoad, packet);
+        InstantiateRoad(startRoad, nextPassableRoadPacket);
 
     }
 
@@ -178,7 +178,7 @@ public class RoadGeneration : MonoBehaviour
         {
             if (roadSystem.GetSize() >= generationDepth * generationMagnitude) return;
             
-            List<RoadPacket> validConnections = GetValidConnectionRoadsFor(_road);
+            List<PassableRoadPacket> validConnections = GetValidConnectionRoadsFor(_road);
             
             if (validConnections.Count == 0) continue;  // exceedingly rare case when neighboring roads on all axes need to connect (just haven't made this art yet lol)
 
@@ -211,31 +211,38 @@ public class RoadGeneration : MonoBehaviour
                 if (PotentialRoadIsValidAtPosition(terminalData, offsetPosition[0], offsetPosition[1]))
                 {
                     // The terminal is valid, let's create it
-                    RoadPacket packet = new RoadPacket(offsetPosition[0], offsetPosition[1], axis, GetTerminalForAxis(axis));
+                    RoadData terminal = GetTerminalForAxis(axis);
+                    PassableRoadPacket packet = new PassableRoadPacket(offsetPosition[0], offsetPosition[1], axis, terminal, diagonalTerminalDatas.Contains(terminal));
                     InstantiateRoad(_road, packet);
                 }
                 else
                 {
                     // The terminal is invalid, create any valid road instead
-                    List<RoadPacket> validConnectionRoads = GetValidConnectionRoadsFor(_road);
+                    List<PassableRoadPacket> validConnectionRoads = GetValidConnectionRoadsFor(_road);
 
                     if (validConnectionRoads.Count == 0) continue;  // exceedingly rare case when neighboring roads on all axes need to connect
                     
                     InstantiateRoad(_road, validConnectionRoads[Random.Range(0, validConnectionRoads.Count)]);
                     
-                    // Non-terminal is created
+                    // Non-terminal is instantiated
                     reTerminate = true;
                 }
             }
         }
         
+        // If a non-terminal has been instantiated, re-run method to account for possible new unconnected axes
+        // Recursion is guaranteed to terminate because any non-terminal must either connect to a neighboring road or terminate on the proceeding cycle
         if (reTerminate) TerminateAllRoads();
     }
     
-    void InstantiateRoad(Road currRoad, RoadPacket roadPacket)
+    void InstantiateRoad(Road currRoad, PassableRoadPacket roadPacket)
     {
+        // Where currRoad is the road to build off of and roadPacket contains the road to build
+        
+        Vector3 position = GetConnectionPosOnAxis(currRoad, roadPacket.roadData.prefab, roadPacket.axis);
+        
         GameObject go = Instantiate(roadPacket.roadData.prefab, 
-            GetConnectionPosOnAxis(currRoad, roadPacket.roadData.prefab, roadPacket.axis), 
+            position, 
             Quaternion.identity, 
             transform);
         
@@ -243,10 +250,32 @@ public class RoadGeneration : MonoBehaviour
         
         roadSystem.AddAt(go.GetComponent<Road>(), roadPacket.x, roadPacket.y);
         
-        if (roadPacket.requiresCorners) InstantiateCornerRoads();
+        if (roadPacket.requiresCorners) InstantiateCornerRoads(currRoad, roadPacket);
+        
+        // Can we delete any overlapping corners?
+        
+        // If currRoad is diagonal along roadPacket.axis, we can assume it has already created corners
+        // Therefore, we can safely Destroy() the corners created for the most recent road
+        
     }
-    
-    void InstantiateCornerRoads() { }
+
+    void InstantiateCornerRoads(Road currRoad, PassableRoadPacket roadPacket)
+    {
+        // if (!ShouldCreateCornersOnAxis(currRoad, roadPacket)) return;
+        
+        (string, string)[] axes = GetParallelCornerAxes(roadPacket.axis);
+        
+        foreach ((string, string) axis in axes)
+        {
+            RoadData corner = FindCornerByAxis(axis.Item1);
+            
+            Instantiate(
+                corner.prefab,
+                GetConnectionPosOnAxis(currRoad, currRoad.GetData().prefab, axis.Item2),  // Use position relative to currRoad and currRoad to match its corner
+                Quaternion.identity,
+                currRoad.transform);
+        }
+    }
     
     void DestroyAllRoadsInSystem()
     {
@@ -258,31 +287,44 @@ public class RoadGeneration : MonoBehaviour
     
     #region Calculation
     
-    RoadData FindRoad(string _name) => allRoadDatas.FirstOrDefault(data => data.roadName == _name);
+    RoadData FindRoadByName(string _name, IEnumerable<RoadData> collection) => collection.FirstOrDefault(data => data.roadName == _name);
 
-    List<RoadPacket> GetValidConnectionRoadsFor(Road _road)
+    RoadData FindCornerByAxis(string axis)
     {
-        // Returns a list of RoadPackets where each RoadPacket represents the position, axis,
+        return axis switch
+        {
+            "upleft" => FindRoadByName("CornerUpLeft", diagonalCornerRoadDatas),
+            "upright" => FindRoadByName("CornerUpRight", diagonalCornerRoadDatas),
+            "downleft" => FindRoadByName("CornerDownLeft", diagonalCornerRoadDatas),
+            "downright" => FindRoadByName("CornerDownRight", diagonalCornerRoadDatas),
+            _ => null
+        };
+    }
+    
+    List<PassableRoadPacket> GetValidConnectionRoadsFor(Road _road)
+    {
+        // Returns a list of RoadPackets where each PassableRoadPacket represents the position, axis,
         // and data of new road to create off of _road
         
         RoadData roadData = _road.GetData();
         int[] roadPosition = _road.GetPosition();
 
-        List<RoadPacket> validConnectionRoads = new List<RoadPacket>();
+        List<PassableRoadPacket> validConnectionRoads = new List<PassableRoadPacket>();
 
         foreach (string axis in connectionsByAxis[roadData].Keys)
         {
+            // Make sure axis is valid
             foreach (RoadData potentialRoadData in connectionsByAxis[roadData][axis])
             {
                 int _x = roadPosition[0] + AxisToOffset(axis, 'x');
                 int _y = roadPosition[1] + AxisToOffset(axis, 'y');
                 
                 if (roadSystem.RoadExistsAt(_x, _y)) continue;
-                
-                if (PotentialRoadIsValidAtPosition(potentialRoadData, _x, _y))
-                {
-                    validConnectionRoads.Add(new RoadPacket(_x, _y, axis, potentialRoadData));
-                }
+
+                if (!PotentialRoadIsValidAtPosition(potentialRoadData, _x, _y)) continue;
+
+                bool requiresCorners = diagonalRoadDatas.Contains(potentialRoadData);  //&& !diagonalRoadDatas.Contains(_road.GetData());
+                validConnectionRoads.Add(new PassableRoadPacket(_x, _y, axis, potentialRoadData, requiresCorners));
             }
         }
 
@@ -292,6 +334,9 @@ public class RoadGeneration : MonoBehaviour
 
     bool PotentialRoadIsValidAtPosition(RoadData potentialRoad, int x, int y)
     {
+        // Make sure potential road adheres to simulation rules
+        if (potentialRoad.axes.Any(axis => !validAxes.Contains(axis))) return false;
+        
         // Confirm potentialRoadData at (x, y) has valid connections to all neighboring roads, if they exist
         foreach (string axis in validAxes)
         {
@@ -332,9 +377,25 @@ public class RoadGeneration : MonoBehaviour
         };
     }
 
+    (string, string)[] GetParallelCornerAxes(string axis)
+    {
+        // Returns an array of tuples in the form { ( corner axis, axis ), ( corner axis, axis) }
+        // where corner
+        
+        return axis switch
+        {
+            "upleft" => new [] { ("downleft", "up"), ("upright", "left") },
+            "upright" => new [] { ("downright", "up"), ("upleft", "right") },
+            "downleft" => new [] { ("upleft", "down"), ("downright", "left") },
+            "downright" => new [] { ("upright", "down"), ("downleft", "right") },
+            _ => Array.Empty<(string, string)>()
+        };
+    }
+
     public int AxisToOffset(string axis, char direction)
     {
         if (!validAxes.Contains(axis)) Debug.Log($"Axis => {axis} does not exist!");
+        
         return direction switch
         {
             'x' => axis switch
@@ -356,8 +417,8 @@ public class RoadGeneration : MonoBehaviour
                 "left" => 0,
                 "right" => 0,
                 "upleft" => 1,
-                "upright" => -1,
-                "downleft" => 1,
+                "upright" => 1,
+                "downleft" => -1,
                 "downright" => -1,
                 _ => 0
             },
@@ -365,11 +426,11 @@ public class RoadGeneration : MonoBehaviour
         };
     }
 
-    public bool RoadIsTerminal(RoadData _roadData) => validTerminals.Contains(_roadData.roadName);
+    public bool RoadIsTerminal(RoadData _roadData) => validTerminals.Contains(_roadData);
     
-    RoadPacket GetSomeNonTerminalRoadPacket(List<RoadPacket> validConnections)
+    PassableRoadPacket GetSomeNonTerminalRoadPacket(List<PassableRoadPacket> validConnections)
     {
-        RoadPacket packet = validConnections[Random.Range(0, validConnections.Count)];
+        PassableRoadPacket packet = validConnections[Random.Range(0, validConnections.Count)];
         
         int attempts = 0;
                 
@@ -384,10 +445,13 @@ public class RoadGeneration : MonoBehaviour
         return packet;
     }
 
-    RoadData GetTerminalForAxis(string axis) => FindRoad(GetOpposingAxis(axis).FirstCharacterToUpper());
+    RoadData GetTerminalForAxis(string axis) => FindRoadByName(GetOpposingAxis(axis).FirstCharacterToUpper(), allRoadDatas);
 
     Vector3 GetConnectionPosOnAxis(Road currRoad, GameObject nextPrefab, string axis)
     {
+        // I promise these parameters make sense!
+        // This method uses the rect sizes & ppu values for the sprites contained in currRoad & nextPrefab to determine the required offset position on axis
+        
         Vector3 currPosition = currRoad.transform.position;
         
         Sprite thisSprite = currRoad.GetData().prefab.GetComponent<SpriteRenderer>().sprite;
@@ -399,6 +463,10 @@ public class RoadGeneration : MonoBehaviour
             "right" => GetRightConnectionPos(currPosition, thisSprite, nextSprite),
             "up" => GetUpConnectionPos(currPosition, thisSprite, nextSprite),
             "down" => GetDownConnectionPos(currPosition, thisSprite, nextSprite),
+            "upleft" => GetUpLeftConnectionPos(currPosition, thisSprite, nextSprite),
+            "upright" => GetUpRightConnectionPos(currPosition, thisSprite, nextSprite),
+            "downleft" => GetDownLeftConnectionPos(currPosition, thisSprite, nextSprite),
+            "downright" => GetDownRightConnectionPos(currPosition, thisSprite, nextSprite),
             _ => Vector3.zero
         };
     }
@@ -406,7 +474,7 @@ public class RoadGeneration : MonoBehaviour
     Vector3 GetLeftConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite otherSprite)
     {
         return thisPosition + new Vector3(
-            -(thisSprite.textureRect.width / thisSprite.pixelsPerUnit / 2 + otherSprite.textureRect.width / otherSprite.pixelsPerUnit / 2),
+            -GetRelativeSpriteSizeX(thisSprite, otherSprite),
             transform.position.y,
             0);
     }
@@ -414,7 +482,7 @@ public class RoadGeneration : MonoBehaviour
     Vector3 GetRightConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite otherSprite)
     {
         return thisPosition + new Vector3(
-            thisSprite.textureRect.width / thisSprite.pixelsPerUnit / 2 + otherSprite.textureRect.width / otherSprite.pixelsPerUnit / 2,
+            GetRelativeSpriteSizeX(thisSprite, otherSprite),
             transform.position.y,
             0);
     }
@@ -423,7 +491,7 @@ public class RoadGeneration : MonoBehaviour
     {
         return thisPosition + new Vector3(
             transform.position.x,
-            thisSprite.textureRect.height / thisSprite.pixelsPerUnit / 2 + otherSprite.textureRect.height / otherSprite.pixelsPerUnit / 2,
+            GetRelativeSpriteSizeY(thisSprite, otherSprite),
             0);
     }
     
@@ -431,8 +499,50 @@ public class RoadGeneration : MonoBehaviour
     {
         return thisPosition + new Vector3(
             transform.position.x,
-            -(thisSprite.textureRect.height / thisSprite.pixelsPerUnit / 2 + otherSprite.textureRect.height / otherSprite.pixelsPerUnit / 2),
+            -GetRelativeSpriteSizeY(thisSprite, otherSprite),
             0);
+    }
+
+    Vector3 GetUpLeftConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite otherSprite)
+    {
+        return thisPosition + new Vector3(
+            -GetRelativeSpriteSizeX(thisSprite, otherSprite),
+            GetRelativeSpriteSizeY(thisSprite, otherSprite),
+            0);
+    }
+
+    Vector3 GetUpRightConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite otherSprite)
+    {
+        return thisPosition + new Vector3(
+            GetRelativeSpriteSizeX(thisSprite, otherSprite),
+            GetRelativeSpriteSizeY(thisSprite, otherSprite),
+            0);    
+    }
+    
+    Vector3 GetDownLeftConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite otherSprite)
+    {
+        return thisPosition + new Vector3(
+            -GetRelativeSpriteSizeX(thisSprite, otherSprite),
+            -GetRelativeSpriteSizeY(thisSprite, otherSprite),
+            0);    
+    }
+    
+    Vector3 GetDownRightConnectionPos(Vector3 thisPosition, Sprite thisSprite, Sprite otherSprite)
+    {
+        return thisPosition + new Vector3(
+            GetRelativeSpriteSizeX(thisSprite, otherSprite),
+            -GetRelativeSpriteSizeY(thisSprite, otherSprite),
+            0);    
+    }
+
+    float GetRelativeSpriteSizeX(Sprite thisSprite, Sprite otherSprite)
+    {
+        return thisSprite.textureRect.width / thisSprite.pixelsPerUnit / 2 + otherSprite.textureRect.width / otherSprite.pixelsPerUnit / 2;
+    }
+
+    float GetRelativeSpriteSizeY(Sprite thisSprite, Sprite otherSprite)
+    {
+        return thisSprite.textureRect.height / thisSprite.pixelsPerUnit / 2 + otherSprite.textureRect.height / otherSprite.pixelsPerUnit / 2;
     }
     
     #endregion
@@ -456,20 +566,17 @@ public class RoadGeneration : MonoBehaviour
     {
         if (useOnlySquareRoads && useOnlyDiagonalRoads)
             throw new Exception("Cannot use only square roads and only diagonal roads at once. Either leave both as 'false' or mark one as true");
+
+        if (Application.isPlaying) Setup();
     }
+    
     #endregion
 }
 
 public class RoadSystem
 {
-    private Dictionary<int, Dictionary<int, Road>> system;
+    private Dictionary<int, Dictionary<int, StorableRoadPacket>> system = new();
     private int roadsInSystem;
-
-    public RoadSystem()
-    {
-        this.system = new Dictionary<int, Dictionary<int, Road>>();
-        roadsInSystem = 0;
-    }
 
     public int GetSize() => roadsInSystem;
 
@@ -479,18 +586,18 @@ public class RoadSystem
         {
             if (system[x] is null)
             {
-                system[x] = new Dictionary<int, Road>() { { y, road } }; // y level not initialized, initialize y level
+                system[x] = new Dictionary<int, StorableRoadPacket>() { { y, new StorableRoadPacket(road) } }; // y level not initialized, initialize y level
                 roadsInSystem += 1;
             }
             else if (!system[x].ContainsKey(y))
             {
-                system[x][y] = road; // y level initialized, but [x][y] does not exist, add
+                system[x][y] = new StorableRoadPacket(road); // y level initialized, but [x][y] does not exist, add
                 roadsInSystem += 1;
             }
         }
         else
         {
-            system[x] = new Dictionary<int, Road>() { { y, road } };  // x level does not exist, initialize y level and add
+            system[x] = new Dictionary<int, StorableRoadPacket>() { { y, new StorableRoadPacket(road) } };  // x level does not exist, initialize y level and add
             roadsInSystem += 1;
         }
     }
@@ -504,11 +611,11 @@ public class RoadSystem
 
     public bool GetAt(int x, int y, out Road _road)
     {
-        _road = RoadExistsAt(x, y) ? system[x][y] : null;
+        _road = RoadExistsAt(x, y) ? system[x][y].road : null;
 
         return _road is not null;
     }
-
+    
     public List<Road> GetAllFreeNonTerminalRoads(RoadGeneration roadGeneration, bool includeTerminals = false)
     {
         List<Road> nonTerminalRoads = new List<Road>();
@@ -519,7 +626,7 @@ public class RoadSystem
 
             foreach (int yLevel in system[xLevel].Keys)
             {
-                Road _road = system[xLevel][yLevel];
+                Road _road = system[xLevel][yLevel].road;
                 int[] _roadPosition = _road.GetPosition();
 
                 // Check if has any free axes to connect with
@@ -537,20 +644,30 @@ public class RoadSystem
 
     public void Reset()
     {
-        system = new Dictionary<int, Dictionary<int, Road>>();
+        system.Clear();
         roadsInSystem = 0;
     }
     
 }
 
-public struct RoadPacket
+public readonly struct StorableRoadPacket
+{
+    public readonly Road road;
+
+    public StorableRoadPacket(Road _road)
+    {
+        road = _road;
+    }
+}
+
+public readonly struct PassableRoadPacket
 {
     public readonly int x, y;
     public readonly string axis;
     public readonly RoadData roadData;
-    public bool requiresCorners;
+    public readonly bool requiresCorners;
 
-    public RoadPacket(int _x, int _y, string _axis, RoadData _roadData, bool _requiresCorners = false)
+    public PassableRoadPacket(int _x, int _y, string _axis, RoadData _roadData, bool _requiresCorners = false)
     {
         x = _x;
         y = _y;

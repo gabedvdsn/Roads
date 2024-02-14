@@ -13,7 +13,7 @@ GameObject:
   - component: {fileID: 556076292963006590}
   m_Layer: 0
   m_Name: UpLeftToDownRightToUp
-  m_TagString: Untagged
+  m_TagString: Road
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0

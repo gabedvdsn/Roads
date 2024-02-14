@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   roadName: VRightToLeft
   axes:
-  - upleft
-  - downleft
+  - upright
+  - downright
   - left
   prefab: {fileID: 4979121048363642486, guid: 0b783081dce74f343b1ca12e0f51987e, type: 3}

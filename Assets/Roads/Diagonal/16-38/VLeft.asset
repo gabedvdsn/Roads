@@ -14,6 +14,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   roadName: VDownToUp
   axes:
-  - upleft
   - downleft
+  - upleft
   prefab: {fileID: 7162032054309164696, guid: 89b08d5500c175a4a9228f32291ad744, type: 3}
