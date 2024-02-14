@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 27863975d9fcac24892bafccb65e7f5f, type: 3}
   m_Name: CuldesacUpLeft
   m_EditorClassIdentifier: 
-  roadName: CuldesacUpLeft
+  roadName: Upleft
   axes:
   - upleft
   prefab: {fileID: 2690271239843354835, guid: 6d4565b33676f7846a0b8a5ddc5752d4, type: 3}

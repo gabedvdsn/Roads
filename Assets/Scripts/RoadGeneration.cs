@@ -21,45 +21,44 @@ public class RoadGeneration : MonoBehaviour
     [SerializeField] private List<RoadData> diagonalCornerRoadDatas;
 
     private List<RoadData> allRoadDatas;
+    private string[] validAxes;
+    private string[] validTerminals;
     
     private int generationDepth;
     private float generationMagnitude;
 
     [Header("UI Info")] 
     [SerializeField] private TMPro.TMP_InputField generationDepthField;
-    [FormerlySerializedAs("maxGenerationMagnitudeField")] [SerializeField] private TMPro.TMP_InputField generationMagnitudeField;
+    [SerializeField] private TMPro.TMP_InputField generationMagnitudeField;
 
     private RoadSystem roadSystem;
     private Dictionary<RoadData, Dictionary<string, List<RoadData>>> connectionsByAxis;
 
-    public readonly string[] terminalRoads =
+    private readonly string[] squareTerminals =
     {
-        // Square terminals
         "Up",
         "Down",
         "Left",
-        "Right",
-        // Diagonal terminals
+        "Right"
+    };
+    
+    private readonly string[] diagonalTerminals =
+    {
         "UpRight",
         "UpLeft",
         "DownRight",
         "DownLeft"
     };
 
-    private readonly string[] validAxes =
+    // Separate array of square axes
+    private readonly string[] squareAxes =
     {
-        // Square axes
         "up",
         "down",
         "left",
-        "right",
-        // Diagonal axes
-        "upright",
-        "upleft",
-        "downright",
-        "downleft"
+        "right"
     };
-
+    
     // Separate array of diagonal axes for corners
     private readonly string[] diagonalAxes =
     {
@@ -74,18 +73,34 @@ public class RoadGeneration : MonoBehaviour
     {
         roadSystem = new RoadSystem();
         
-        CreateRoadDatas();
+        CreateVariablesBySettings();
         CreateConnectionsByAxis();
     }
 
     #region Setup
-    void CreateRoadDatas()
+    
+    void CreateVariablesBySettings()
     {
         allRoadDatas = new List<RoadData>();
-        
-        if (!useOnlyDiagonalRoads && !useOnlyDiagonalRoads) allRoadDatas = squareRoadDatas.Concat(diagonalRoadDatas).ToList();
-        else if (useOnlySquareRoads && !useOnlyDiagonalRoads) allRoadDatas = squareRoadDatas;
-        else if (useOnlyDiagonalRoads && !useOnlyDiagonalRoads) allRoadDatas = diagonalRoadDatas;
+
+        if (!useOnlySquareRoads && !useOnlyDiagonalRoads)
+        {
+            allRoadDatas = squareRoadDatas.Concat(diagonalRoadDatas).ToList();
+            validAxes = squareAxes.Concat(diagonalAxes).ToArray();
+            validTerminals = squareTerminals.Concat(diagonalTerminals).ToArray();
+        }
+        else if (useOnlySquareRoads && !useOnlyDiagonalRoads)
+        {
+            allRoadDatas = squareRoadDatas;
+            validAxes = squareAxes;
+            validTerminals = squareTerminals;
+        }
+        else if (!useOnlySquareRoads && useOnlyDiagonalRoads)
+        {
+            allRoadDatas = diagonalRoadDatas;
+            validAxes = diagonalAxes;
+            validTerminals = diagonalTerminals;
+        }
         
         // In the case that both flags are true, allRoadDatas remains empty
     }
@@ -134,9 +149,13 @@ public class RoadGeneration : MonoBehaviour
     
     void GenerateStart()
     {
-        RoadData roadData = FindRoad(terminalRoads[Random.Range(0, terminalRoads.Length)]);
+        RoadData roadData = GetTerminalForAxis(validAxes[Random.Range(0, validAxes.Length)]);
 
-        if (roadData is null) return;
+        if (roadData is null)
+        {
+            Debug.Log($"Could not generate start because initial RoadData is null");
+            return;
+        }
         
         GameObject go = Instantiate(roadData.prefab, transform);
         
@@ -305,12 +324,17 @@ public class RoadGeneration : MonoBehaviour
             "down" => "up",
             "left" => "right",
             "right" => "left",
+            "upleft" => "downright",
+            "upright" => "downleft",
+            "downleft" => "upright",
+            "downright" => "upleft",
             _ => ""
         };
     }
 
     public int AxisToOffset(string axis, char direction)
     {
+        if (!validAxes.Contains(axis)) Debug.Log($"Axis => {axis} does not exist!");
         return direction switch
         {
             'x' => axis switch
@@ -319,6 +343,10 @@ public class RoadGeneration : MonoBehaviour
                 "down" => 0,
                 "left" => -1,
                 "right" => 1,
+                "upleft" => -1,
+                "upright" => 1,
+                "downleft" => -1,
+                "downright" => 1,
                 _ => 0
             },
             'y' => axis switch
@@ -327,13 +355,17 @@ public class RoadGeneration : MonoBehaviour
                 "down" => -1,
                 "left" => 0,
                 "right" => 0,
+                "upleft" => 1,
+                "upright" => -1,
+                "downleft" => 1,
+                "downright" => -1,
                 _ => 0
             },
             _ => 0
         };
     }
 
-    public bool RoadIsTerminal(RoadData _roadData) => terminalRoads.Contains(_roadData.roadName);
+    public bool RoadIsTerminal(RoadData _roadData) => validTerminals.Contains(_roadData.roadName);
     
     RoadPacket GetSomeNonTerminalRoadPacket(List<RoadPacket> validConnections)
     {
@@ -343,7 +375,7 @@ public class RoadGeneration : MonoBehaviour
                 
         while (RoadIsTerminal(packet.roadData))
         {
-            if (attempts >= terminalRoads.Length) break;
+            if (attempts >= validTerminals.Length) break;
                     
             packet = validConnections[Random.Range(0, validConnections.Count)];
             attempts += 1;
@@ -422,7 +454,7 @@ public class RoadGeneration : MonoBehaviour
 
     private void OnValidate()
     {
-        if (useOnlyDiagonalRoads && useOnlyDiagonalRoads)
+        if (useOnlySquareRoads && useOnlyDiagonalRoads)
             throw new Exception("Cannot use only square roads and only diagonal roads at once. Either leave both as 'false' or mark one as true");
     }
     #endregion
