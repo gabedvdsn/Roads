@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using AYellowpaper.SerializedCollections;
 using Unity.VisualScripting;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.Serialization;
 using Random = UnityEngine.Random;
@@ -13,6 +15,21 @@ public class RoadGeneration : MonoBehaviour
     // If neither bool is true, use both square and diagonal roads
     [SerializeField] private bool useOnlySquareRoads;
     [SerializeField] private bool useOnlyDiagonalRoads;
+    
+    [Space]
+    
+    [Header("GenerationRule")]
+    [SerializeField] private int separation = 0;
+    [SerializeField] [Tooltip("Tendency for roads to continue along the same generationAxis it was generated on")] private int linearityCoefficient;
+    [SerializeField] private AnimationCurve linearityCurve;
+    [Space] 
+    [SerializedDictionary("Rule", "Priority")] 
+    [SerializeField] private SerializedDictionary<GenerationRule, int> rulePriorities;
+
+    private RuleMatrix separationMatrix;
+    private RuleMatrix linearityMatrix;
+    
+    [Space]
     
     [Header("Road Info")]
     [SerializeField] private RoadData[] squareRoadDatas;
@@ -68,6 +85,7 @@ public class RoadGeneration : MonoBehaviour
     void Setup()
     {
         CreateVariablesBySettings();
+        CreateRuleMatrices();
         CreateConnectionsByAxis();
     }
     
@@ -93,6 +111,11 @@ public class RoadGeneration : MonoBehaviour
         }
         
         // In the case that both flags are true, allRoadDatas remains empty
+    }
+
+    void CreateRuleMatrices()
+    {
+        separationMatrix = new RuleMatrix();
     }
     
     void CreateConnectionsByAxis()
@@ -162,7 +185,7 @@ public class RoadGeneration : MonoBehaviour
             InstantiateCornerRoads(startRoad, startPassableRoadPacket);
         }
         
-        roadSystem.AddAt(go.GetComponent<Road>(), 0, 0);
+        roadSystem.AddAt(go.GetComponent<Road>(), new PassableRoadPacket(0, 0, startRoad.GetData().axes[0], startRoad.GetData()), 0, 0);
 
         // Generate off of startRoad manually
         List<PassableRoadPacket> validConnections = GetValidConnectionRoadsFor(go.GetComponent<Road>());
@@ -179,6 +202,8 @@ public class RoadGeneration : MonoBehaviour
             if (roadSystem.GetSize() >= generationDepth * generationMagnitude) return;
             
             List<PassableRoadPacket> validConnections = GetValidConnectionRoadsFor(_road);
+
+            validConnections = ApplyRules(_road, validConnections);
             
             if (validConnections.Count == 0) continue;  // exceedingly rare case when neighboring roads on all axes need to connect (just haven't made this art yet lol)
 
@@ -239,7 +264,7 @@ public class RoadGeneration : MonoBehaviour
     {
         // Where currRoad is the road to build off of and roadPacket contains the road to build
         
-        Vector3 position = GetConnectionPosOnAxis(currRoad, roadPacket.roadData.prefab, roadPacket.axis);
+        Vector3 position = GetConnectionPosOnAxis(currRoad, roadPacket.roadData.prefab, roadPacket.generationAxis);
         
         GameObject go = Instantiate(roadPacket.roadData.prefab, 
             position, 
@@ -248,13 +273,13 @@ public class RoadGeneration : MonoBehaviour
         
         go.GetComponent<Road>().Initialize(roadPacket.x, roadPacket.y);
         
-        roadSystem.AddAt(go.GetComponent<Road>(), roadPacket.x, roadPacket.y);
+        roadSystem.AddAt(go.GetComponent<Road>(), roadPacket, roadPacket.x, roadPacket.y);
         
         if (roadPacket.requiresCorners) InstantiateCornerRoads(currRoad, roadPacket);
         
         // Can we delete any overlapping corners?
         
-        // If currRoad is diagonal along roadPacket.axis, we can assume it has already created corners
+        // If currRoad is diagonal along roadPacket.generationAxis, we can assume it has already created corners
         // Therefore, we can safely Destroy() the corners created for the most recent road
         
     }
@@ -263,7 +288,7 @@ public class RoadGeneration : MonoBehaviour
     {
         // if (!ShouldCreateCornersOnAxis(currRoad, roadPacket)) return;
         
-        (string, string)[] axes = GetParallelCornerAxes(roadPacket.axis);
+        (string, string)[] axes = GetParallelCornerAxes(roadPacket.generationAxis);
         
         foreach ((string, string) axis in axes)
         {
@@ -300,37 +325,6 @@ public class RoadGeneration : MonoBehaviour
             _ => null
         };
     }
-    
-    List<PassableRoadPacket> GetValidConnectionRoadsFor(Road _road)
-    {
-        // Returns a list of RoadPackets where each PassableRoadPacket represents the position, axis,
-        // and data of new road to create off of _road
-        
-        RoadData roadData = _road.GetData();
-        int[] roadPosition = _road.GetPosition();
-
-        List<PassableRoadPacket> validConnectionRoads = new List<PassableRoadPacket>();
-
-        foreach (string axis in connectionsByAxis[roadData].Keys)
-        {
-            // Make sure axis is valid
-            foreach (RoadData potentialRoadData in connectionsByAxis[roadData][axis])
-            {
-                int _x = roadPosition[0] + AxisToOffset(axis, 'x');
-                int _y = roadPosition[1] + AxisToOffset(axis, 'y');
-                
-                if (roadSystem.RoadExistsAt(_x, _y)) continue;
-
-                if (!PotentialRoadIsValidAtPosition(potentialRoadData, _x, _y)) continue;
-
-                bool requiresCorners = diagonalRoadDatas.Contains(potentialRoadData);  //&& !diagonalRoadDatas.Contains(_road.GetData());
-                validConnectionRoads.Add(new PassableRoadPacket(_x, _y, axis, potentialRoadData, requiresCorners));
-            }
-        }
-
-        return validConnectionRoads;
-
-    }
 
     bool PotentialRoadIsValidAtPosition(RoadData potentialRoad, int x, int y)
     {
@@ -353,7 +347,7 @@ public class RoadGeneration : MonoBehaviour
             if (!connectionsByAxis[existingRoad.GetData()].ContainsKey(GetOpposingAxis(axis)) &&
                 !connectionsByAxis[potentialRoad].ContainsKey(axis)) continue;
             
-            // Check if existingRoad connects to potentialRoad along opposing axis, if not, return false
+            // Check if existingRoad connects to potentialRoad along opposing generationAxis, if not, return false
             if (!(connectionsByAxis[existingRoad.GetData()].ContainsKey(GetOpposingAxis(axis)) && potentialRoad.axes.Contains(axis))) return false;
         }
 
@@ -379,7 +373,7 @@ public class RoadGeneration : MonoBehaviour
 
     (string, string)[] GetParallelCornerAxes(string axis)
     {
-        // Returns an array of tuples in the form { ( corner axis, axis ), ( corner axis, axis) }
+        // Returns an array of tuples in the form { ( corner generationAxis, generationAxis ), ( corner generationAxis, generationAxis) }
         // where corner
         
         return axis switch
@@ -450,7 +444,7 @@ public class RoadGeneration : MonoBehaviour
     Vector3 GetConnectionPosOnAxis(Road currRoad, GameObject nextPrefab, string axis)
     {
         // I promise these parameters make sense!
-        // This method uses the rect sizes & ppu values for the sprites contained in currRoad & nextPrefab to determine the required offset position on axis
+        // This method uses the rect sizes & ppu values for the sprites contained in currRoad & nextPrefab to determine the required offset position on generationAxis
         
         Vector3 currPosition = currRoad.transform.position;
         
@@ -547,6 +541,142 @@ public class RoadGeneration : MonoBehaviour
     
     #endregion
     
+    #region Generation Rules
+
+    List<PassableRoadPacket> GetValidConnectionRoadsFor(Road _road)
+    {
+        // Returns a list of RoadPackets where each PassableRoadPacket represents the position, generationAxis,
+        // and data of new road to create off of _road
+        
+        RoadData roadData = _road.GetData();
+        int[] roadPosition = _road.GetPosition();
+
+        List<PassableRoadPacket> validConnectionRoads = new List<PassableRoadPacket>();
+
+        foreach (string axis in connectionsByAxis[roadData].Keys)
+        {
+            // Make sure generationAxis is valid
+            foreach (RoadData potentialRoadData in connectionsByAxis[roadData][axis])
+            {
+                int _x = roadPosition[0] + AxisToOffset(axis, 'x');
+                int _y = roadPosition[1] + AxisToOffset(axis, 'y');
+                
+                if (roadSystem.RoadExistsAt(_x, _y)) continue;
+
+                if (!PotentialRoadIsValidAtPosition(potentialRoadData, _x, _y)) continue;
+
+                bool requiresCorners = diagonalRoadDatas.Contains(potentialRoadData);  //&& !diagonalRoadDatas.Contains(_road.GetData());
+                validConnectionRoads.Add(new PassableRoadPacket(_x, _y, axis, potentialRoadData, requiresCorners));
+            }
+        }
+
+        return validConnectionRoads;
+
+    }
+
+    List<PassableRoadPacket> ApplyRules(Road _road, List<PassableRoadPacket> validConnections)
+    {
+        if (validConnections.Count !> 0) return validConnections;
+        
+        List<PassableRoadPacket> modifiedValidConnections = new List<PassableRoadPacket>();
+        
+        // Apply rules by priority
+        foreach (GenerationRule rule in rulePriorities.Keys.ToArray().OrderBy(rule => rulePriorities[rule]).Reverse()) modifiedValidConnections = ApplyRule(rule, _road, validConnections);
+
+        return modifiedValidConnections;
+    }
+
+    List<PassableRoadPacket> ApplyRule(GenerationRule rule, Road _road, List<PassableRoadPacket> validConnections)
+    {
+        return rule switch
+        {
+            GenerationRule.Separation => ApplySeparationRule(_road, validConnections),
+            GenerationRule.Linearity => ApplyLinearityRule(_road, validConnections),
+            _ => validConnections
+        };
+    }
+    
+    List<PassableRoadPacket> ApplySeparationRule(Road _road, List<PassableRoadPacket> validConnections)
+    {
+        List<PassableRoadPacket> modifiedValidConnections = new List<PassableRoadPacket>();
+        
+        PassableRoadPacket bestPacket = validConnections[0];
+        int bestSeparation = GetMinRoadSeparation(bestPacket);
+        
+        foreach (PassableRoadPacket packet in validConnections)
+        {
+            
+        }
+
+        return modifiedValidConnections;
+    }
+
+    List<PassableRoadPacket> ApplyLinearityRule(Road _road, List<PassableRoadPacket> validConnections)
+    {
+        List<PassableRoadPacket> modifiedValidConnections = new List<PassableRoadPacket>();
+
+
+
+        return modifiedValidConnections;
+    }
+
+    void ImpactRuleMatrices(PassableRoadPacket packet)
+    {
+        foreach (GenerationRule rule in (GenerationRule[])Enum.GetValues(typeof(GenerationRule))) ImpactRuleMatrix(rule, packet);
+    }
+
+    void ImpactRuleMatrix(GenerationRule rule, PassableRoadPacket packet)
+    {
+        switch(rule)
+        {
+            case GenerationRule.Separation:
+                if (separation ! > 0) break;
+                
+                ImpactSeparationMatrix(packet);
+                break;
+            
+            case GenerationRule.Linearity:
+                if (linearityCoefficient ! > 0) break;
+                
+                ImpactLinearityMatrix(packet);
+                break;
+            
+            default:
+                return;
+        };
+    }
+    
+    void ImpactSeparationMatrix(PassableRoadPacket packet)
+    {
+        
+    }
+    
+    void ImpactLinearityMatrix(PassableRoadPacket packet)
+    {
+        
+    }
+
+    int GetMinRoadSeparation(PassableRoadPacket packet)
+    {
+        foreach (string axis in validAxes)
+        {
+            int sepCounter = 0;
+            int x = packet.x;
+            int y = packet.y;
+
+            while (sepCounter < separation)
+            {
+                
+
+                sepCounter += 1;
+            }
+        }
+
+        return 0;
+    }
+    
+    #endregion
+    
     #region Editor
     
     public void OnClickReset()
@@ -580,24 +710,24 @@ public class RoadSystem
 
     public int GetSize() => roadsInSystem;
 
-    public void AddAt(Road road, int x, int y)
+    public void AddAt(Road road, PassableRoadPacket packet, int x, int y)
     {
         if (system.ContainsKey(x))
         {
             if (system[x] is null)
             {
-                system[x] = new Dictionary<int, StorableRoadPacket>() { { y, new StorableRoadPacket(road) } }; // y level not initialized, initialize y level
+                system[x] = new Dictionary<int, StorableRoadPacket>() { { y, new StorableRoadPacket(road, packet) } }; // y level not initialized, initialize y level
                 roadsInSystem += 1;
             }
             else if (!system[x].ContainsKey(y))
             {
-                system[x][y] = new StorableRoadPacket(road); // y level initialized, but [x][y] does not exist, add
+                system[x][y] = new StorableRoadPacket(road, packet); // y level initialized, but [x][y] does not exist, add
                 roadsInSystem += 1;
             }
         }
         else
         {
-            system[x] = new Dictionary<int, StorableRoadPacket>() { { y, new StorableRoadPacket(road) } };  // x level does not exist, initialize y level and add
+            system[x] = new Dictionary<int, StorableRoadPacket>() { { y, new StorableRoadPacket(road, packet) } };  // x level does not exist, initialize y level and add
             roadsInSystem += 1;
         }
     }
@@ -650,34 +780,101 @@ public class RoadSystem
     
 }
 
+public class RuleMatrix
+{
+    private readonly Dictionary<int, Dictionary<int, RuleMatrixPacket>> matrix;
+
+    public RuleMatrix()
+    {
+        matrix = new Dictionary<int, Dictionary<int, RuleMatrixPacket>>();
+    }
+
+    public void Add(int x, int y, int value, float coefficient = 1f)
+    {
+        if (matrix.ContainsKey(x))
+        {
+            if (matrix[x] is null)
+            {
+                matrix[x] = new Dictionary<int, RuleMatrixPacket>() { { y, new RuleMatrixPacket(value, coefficient) } }; // y level not initialized, initialize y level
+            }
+            else if (!matrix[x].ContainsKey(y))
+            {
+                matrix[x][y] = new RuleMatrixPacket(value, coefficient); // y level initialized, but [x][y] does not exist, add
+            }
+        }
+        else
+        {
+            matrix[x] = new Dictionary<int, RuleMatrixPacket>() { { y, new RuleMatrixPacket(value, coefficient) } };  // x level does not exist, initialize y level and add
+        }
+    }
+
+    public int Get(int x, int y) => ValueExistsAt(x, y) ? matrix[x][y].Get() : 0;
+
+    public float GetCoef(int x, int y) => ValueExistsAt(x, y) ? matrix[x][y].GetCoef() : 0f;
+
+    public bool ValueExistsAt(int x, int y)
+    {
+        if (matrix.ContainsKey(x)) return matrix[x] is not null && matrix[x].ContainsKey(y);
+        
+        return false;
+    }
+}
+
+public struct RuleMatrixPacket
+{
+    private int value;
+    private float coefficient;
+
+    public RuleMatrixPacket(int _value, float _coefficient)
+    {
+        value = _value;
+        coefficient = _coefficient;
+    }
+
+    public int Get() => value;
+
+    public float GetCoef() => value * coefficient;
+}
+
 public readonly struct StorableRoadPacket
 {
     public readonly Road road;
+    public readonly PassableRoadPacket packet;
 
-    public StorableRoadPacket(Road _road)
+    public StorableRoadPacket(Road _road, PassableRoadPacket _packet)
     {
         road = _road;
+        packet = _packet;
     }
 }
 
 public readonly struct PassableRoadPacket
 {
+    // The PassableRoadPacket contains the information concerning the generation of a road
     public readonly int x, y;
-    public readonly string axis;
+    public readonly string generationAxis;
     public readonly RoadData roadData;
     public readonly bool requiresCorners;
 
-    public PassableRoadPacket(int _x, int _y, string _axis, RoadData _roadData, bool _requiresCorners = false)
+    public PassableRoadPacket(int _x, int _y, string _generationAxis, RoadData _roadData, bool _requiresCorners = false)
     {
         x = _x;
         y = _y;
-        axis = _axis;
+        generationAxis = _generationAxis;
         roadData = _roadData;
         requiresCorners = _requiresCorners;
     }
 
     public override string ToString()
     {
-        return $"({x}, {y}) on {axis} => {roadData}";
+        return $"({x}, {y}) on {generationAxis} => {roadData}";
     }
+
+    public static PassableRoadPacket Empty() => new PassableRoadPacket(0, 0, "", null);
+}
+
+public enum GenerationRule
+{
+    Separation,
+    Linearity
 }

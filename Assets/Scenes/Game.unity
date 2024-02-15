@@ -1831,6 +1831,38 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   useOnlySquareRoads: 0
   useOnlyDiagonalRoads: 0
+  separation: 0
+  linearityCoefficient: 10
+  linearityCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: -0.0041656494
+      value: 1
+      inSlope: -0.99585164
+      outSlope: -0.99585164
+      tangentMode: 34
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0.33333334
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: -0.99585164
+      outSlope: -0.99585164
+      tangentMode: 34
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  rulePriorities:
+    _serializedList:
+    - Key: 0
+      Value: 1
+    - Key: 1
+      Value: 0
   squareRoadDatas:
   - {fileID: 11400000, guid: 9849e45645ffc59429d775aea08bac0e, type: 2}
   - {fileID: 11400000, guid: 3d7bda5f21c816b41939a8d7b34b0860, type: 2}
