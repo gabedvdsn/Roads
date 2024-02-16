@@ -306,7 +306,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 647, y: 55.476044}
+  m_AnchoredPosition: {x: 366, y: 162.95215}
   m_SizeDelta: {x: 160, y: 30}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &349014597
@@ -707,7 +707,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 647, y: -142.4761}
+  m_AnchoredPosition: {x: 366, y: -35}
   m_SizeDelta: {x: 160, y: 30}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &533241328
@@ -952,7 +952,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 647.5, y: -54.571926}
+  m_AnchoredPosition: {x: 366.5, y: 52.90418}
   m_SizeDelta: {x: 159, y: 25.9045}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &574406743
@@ -1194,7 +1194,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 647, y: -82.523895}
+  m_AnchoredPosition: {x: 366, y: 24.95221}
   m_SizeDelta: {x: 160, y: 30}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1125186449
@@ -1462,7 +1462,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 647, y: -114.52408}
+  m_AnchoredPosition: {x: 366, y: -7.0479736}
   m_SizeDelta: {x: 194, y: 25.9045}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1263293868
@@ -1829,10 +1829,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 82b6fc45646574a49b328f33b83e2b65, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  useOnlySquareRoads: 0
+  useOnlySquareRoads: 1
   useOnlyDiagonalRoads: 0
-  separation: 0
+  useRules: 1
+  separation: 2
   linearityCoefficient: 10
+  curveCoefficient: 0
+  deltaCurveCoefficient: 0
   linearityCurve:
     serializedVersion: 2
     m_Curve:
@@ -1861,8 +1864,6 @@ MonoBehaviour:
     _serializedList:
     - Key: 0
       Value: 1
-    - Key: 1
-      Value: 0
   squareRoadDatas:
   - {fileID: 11400000, guid: 9849e45645ffc59429d775aea08bac0e, type: 2}
   - {fileID: 11400000, guid: 3d7bda5f21c816b41939a8d7b34b0860, type: 2}
