@@ -9,16 +9,20 @@ public class Road : MonoBehaviour
 {
     [SerializeField] private RoadData data;
 
-    private int x, y;
+    private PassableRoadPacket generationPacket;
 
-    public void Initialize(int _x, int _y)
+    public void Initialize(PassableRoadPacket _generationPacket)
     {
-        x = _x;
-        y = _y;
-        gameObject.name = $"{data.roadName} ({x}, {y})";
+        generationPacket = _generationPacket;
+        
+        gameObject.name = $"{data.roadName} ({generationPacket.x}, {generationPacket.x}) => {generationPacket.generationAxis}";
     }
 
-    public int[] GetPosition() => new[] { x, y };
+    public int[] GetPosition() => new[] { generationPacket.x, generationPacket.y };
+
+    public string GetGenerationAxis() => generationPacket.generationAxis;
+
+    public bool RequiresCorners() => generationPacket.requiresCorners;
 
     public RoadData GetData() => data;
     

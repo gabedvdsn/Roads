@@ -3,9 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using AYellowpaper.SerializedCollections;
 using Unity.VisualScripting;
-using UnityEditor;
 using UnityEngine;
-using UnityEngine.Serialization;
 using Random = UnityEngine.Random;
 
 public class RoadGeneration : MonoBehaviour
@@ -19,15 +17,17 @@ public class RoadGeneration : MonoBehaviour
     [Space]
     
     [Header("GenerationRule")]
-    [SerializeField] private int separation = 0;
+    [SerializeField] private int separation;
     [SerializeField] [Tooltip("Tendency for roads to continue along the same generationAxis it was generated on")] private int linearityCoefficient;
+    [SerializeField] [Range(0, 1)] private float curveCoefficient;
+    [SerializeField] [Range(0, 1)] private float deltaCurveCoefficient;
     [SerializeField] private AnimationCurve linearityCurve;
     [Space] 
     [SerializedDictionary("Rule", "Priority")] 
     [SerializeField] private SerializedDictionary<GenerationRule, int> rulePriorities;
 
-    private RuleMatrix separationMatrix;
-    private RuleMatrix linearityMatrix;
+    private RuleMatrixInteger separationMatrix;
+    private RuleMatrixAxialFloat linearityMatrix;
     
     [Space]
     
@@ -115,7 +115,8 @@ public class RoadGeneration : MonoBehaviour
 
     void CreateRuleMatrices()
     {
-        separationMatrix = new RuleMatrix();
+        separationMatrix = new RuleMatrixInteger();
+        linearityMatrix = new RuleMatrixAxialFloat();
     }
     
     void CreateConnectionsByAxis()
@@ -176,10 +177,11 @@ public class RoadGeneration : MonoBehaviour
         
         // Initialize start road
         Road startRoad = go.GetComponent<Road>();
-        startRoad.Initialize(startX, startY);
+        PassableRoadPacket packet = new PassableRoadPacket(0, 0, roadData.axes[0], roadData, diagonalRoadDatas.Contains(startRoad.GetData()));
+        startRoad.Initialize(packet);
         
         // Check if we need to add corners
-        if (diagonalRoadDatas.Contains(startRoad.GetData()))
+        if (packet.requiresCorners)
         {
             PassableRoadPacket startPassableRoadPacket = new PassableRoadPacket(0, 0, startRoad.GetData().axes[0], startRoad.GetData(), true);
             InstantiateCornerRoads(startRoad, startPassableRoadPacket);
@@ -271,7 +273,7 @@ public class RoadGeneration : MonoBehaviour
             Quaternion.identity, 
             transform);
         
-        go.GetComponent<Road>().Initialize(roadPacket.x, roadPacket.y);
+        go.GetComponent<Road>().Initialize(roadPacket);
         
         roadSystem.AddAt(go.GetComponent<Road>(), roadPacket, roadPacket.x, roadPacket.y);
         
@@ -368,6 +370,22 @@ public class RoadGeneration : MonoBehaviour
             "downleft" => "upright",
             "downright" => "upleft",
             _ => ""
+        };
+    }
+
+    string[] GetOrthogobalAxes(string axis)
+    {
+        return axis switch
+        {
+            "up" => new []{"left", "right"},
+            "down" => new []{"up", "down"},
+            "left" => new []{"up", "down"},
+            "right" => new []{"left", "right"},
+            "upleft" => new []{"downleft", "upright"},
+            "upright" => new []{"upleft", "downright"},
+            "downleft" => new []{"upleft", "downright"},
+            "downright" => new []{"downleft", "upright"},
+            _ => Array.Empty<string>()
         };
     }
 
@@ -574,15 +592,27 @@ public class RoadGeneration : MonoBehaviour
 
     }
 
-    List<PassableRoadPacket> ApplyRules(Road _road, List<PassableRoadPacket> validConnections)
+    List<PassableRoadPacket> ApplyRules(Road _road, List<PassableRoadPacket> validConnections, List<PassableRoadPacket> _modifiedValidConnections = null, GenerationRule[] _skipRules = null, int _skipIteration = 0, bool _alwaysApplyRules = true)
     {
-        if (validConnections.Count !> 0) return validConnections;
+        if (_modifiedValidConnections != null && _modifiedValidConnections.Count ! > 0)
+        {
+            // If
+            return _skipRules is null ? _modifiedValidConnections : ApplyRules(_road, validConnections, _skipRules: _skipRules.Skip(_skipIteration).Take(_skipRules.Length - _skipIteration).ToArray(), _skipIteration: _skipIteration + 1);
+        }
         
         List<PassableRoadPacket> modifiedValidConnections = new List<PassableRoadPacket>();
         
         // Apply rules by priority
-        foreach (GenerationRule rule in rulePriorities.Keys.ToArray().OrderBy(rule => rulePriorities[rule]).Reverse()) modifiedValidConnections = ApplyRule(rule, _road, validConnections);
-
+        foreach (GenerationRule rule in rulePriorities.Keys.ToArray().OrderBy(rule => rulePriorities[rule]))
+        {
+            if (_skipRules is not null)
+            {
+                if (_skipRules.Contains(rule)) continue;
+            }
+            
+            modifiedValidConnections = ApplyRule(rule, _road, validConnections);
+        }
+        
         return modifiedValidConnections;
     }
 
@@ -600,9 +630,6 @@ public class RoadGeneration : MonoBehaviour
     {
         List<PassableRoadPacket> modifiedValidConnections = new List<PassableRoadPacket>();
         
-        PassableRoadPacket bestPacket = validConnections[0];
-        int bestSeparation = GetMinRoadSeparation(bestPacket);
-        
         foreach (PassableRoadPacket packet in validConnections)
         {
             
@@ -613,11 +640,12 @@ public class RoadGeneration : MonoBehaviour
 
     List<PassableRoadPacket> ApplyLinearityRule(Road _road, List<PassableRoadPacket> validConnections)
     {
-        List<PassableRoadPacket> modifiedValidConnections = new List<PassableRoadPacket>();
+        int[] position = _road.GetPosition();
+        float linearity = linearityMatrix.GetAtOnAxis(position[0], position[1], _road.GetGenerationAxis());
+        
+        if (Random.Range(0f, 1f) > linearity) return validConnections;
 
-
-
-        return modifiedValidConnections;
+        return validConnections.Where(packet => packet.roadData.axes.Contains(_road.GetGenerationAxis())).ToList();
     }
 
     void ImpactRuleMatrices(PassableRoadPacket packet)
@@ -648,32 +676,33 @@ public class RoadGeneration : MonoBehaviour
     
     void ImpactSeparationMatrix(PassableRoadPacket packet)
     {
+        // Starts at 0, goes to separation - 1
         
+        separationMatrix.SetAt(packet.x, packet.y, -1);
+        
+        foreach (string axis in GetOrthogobalAxes(packet.generationAxis))
+        {
+            for (int i = 1; i <= separation; i++)
+            {
+                separationMatrix.SetAt(packet.x + (i * AxisToOffset(axis, 'x')), packet.x + (i * AxisToOffset(axis, 'y')), i - 1);
+            }
+        }
     }
     
     void ImpactLinearityMatrix(PassableRoadPacket packet)
     {
+        // Set linearity value along generation axis
+        float linearityOnAxis = Mathf.Clamp01(linearityCurve.Evaluate(linearityMatrix.GetAtOnAxis(packet.x, packet.y, packet.generationAxis)) - deltaCurveCoefficient);
+        int x = packet.x + AxisToOffset(packet.generationAxis, 'x');
+        int y = packet.y + AxisToOffset(packet.generationAxis, 'y');
         
+        linearityMatrix.SetAtOnAxis(x, y, packet.generationAxis, linearityOnAxis);
+        
+        // Set value in matrix to -1 to indicate that a road is already placed there
+        linearityMatrix.SetAtOnAxis(packet.x, packet.y, packet.generationAxis, -1f);
     }
 
-    int GetMinRoadSeparation(PassableRoadPacket packet)
-    {
-        foreach (string axis in validAxes)
-        {
-            int sepCounter = 0;
-            int x = packet.x;
-            int y = packet.y;
-
-            while (sepCounter < separation)
-            {
-                
-
-                sepCounter += 1;
-            }
-        }
-
-        return 0;
-    }
+    float LinearityFunction(float value) => linearityCurve.Evaluate(value);
     
     #endregion
     
@@ -780,39 +809,64 @@ public class RoadSystem
     
 }
 
-public class RuleMatrix
+public class RuleMatrixInteger
 {
-    private readonly Dictionary<int, Dictionary<int, RuleMatrixPacket>> matrix;
+    private Dictionary<int, Dictionary<int, int>> matrix;
 
-    public RuleMatrix()
+    public RuleMatrixInteger()
     {
-        matrix = new Dictionary<int, Dictionary<int, RuleMatrixPacket>>();
+        matrix = new Dictionary<int, Dictionary<int, int>>();
     }
 
-    public void Add(int x, int y, int value, float coefficient = 1f)
+    public void SetAt(int x, int y, int value)
     {
         if (matrix.ContainsKey(x))
         {
             if (matrix[x] is null)
             {
-                matrix[x] = new Dictionary<int, RuleMatrixPacket>() { { y, new RuleMatrixPacket(value, coefficient) } }; // y level not initialized, initialize y level
+                matrix[x] = new Dictionary<int, int>() { { y, value } }; // y level not initialized, initialize y level
             }
             else if (!matrix[x].ContainsKey(y))
             {
-                matrix[x][y] = new RuleMatrixPacket(value, coefficient); // y level initialized, but [x][y] does not exist, add
+                matrix[x][y] = value; // y level initialized, but [x][y] does not exist, add
+            }
+            else
+            {
+                matrix[x][y] = value;
             }
         }
         else
         {
-            matrix[x] = new Dictionary<int, RuleMatrixPacket>() { { y, new RuleMatrixPacket(value, coefficient) } };  // x level does not exist, initialize y level and add
+            matrix[x] = new Dictionary<int, int>() { { y, value } };  // x level does not exist, initialize y level and add
         }
     }
 
-    public int Get(int x, int y) => ValueExistsAt(x, y) ? matrix[x][y].Get() : 0;
+    public void AddAt(int x, int y, int value)
+    {
+        if (matrix.ContainsKey(x))
+        {
+            if (matrix[x] is null)
+            {
+                matrix[x] = new Dictionary<int, int>() { { y, value } }; // y level not initialized, initialize y level
+            }
+            else if (!matrix[x].ContainsKey(y))
+            {
+                matrix[x][y] = value; // y level initialized, but [x][y] does not exist, add
+            }
+            else
+            {
+                matrix[x][y] += value;
+            }
+        }
+        else
+        {
+            matrix[x] = new Dictionary<int, int>() { { y, value } };  // x level does not exist, initialize y level and add
+        }
+    }
 
-    public float GetCoef(int x, int y) => ValueExistsAt(x, y) ? matrix[x][y].GetCoef() : 0f;
-
-    public bool ValueExistsAt(int x, int y)
+    public int GetAt(int x, int y) => ValueExistsAt(x, y) ? matrix[x][y] : -1;
+    
+    private bool ValueExistsAt(int x, int y)
     {
         if (matrix.ContainsKey(x)) return matrix[x] is not null && matrix[x].ContainsKey(y);
         
@@ -820,20 +874,70 @@ public class RuleMatrix
     }
 }
 
-public struct RuleMatrixPacket
+public class RuleMatrixAxialFloat
 {
-    private int value;
-    private float coefficient;
+    private Dictionary<int, Dictionary<int, Dictionary<string, float>>> matrix;
 
-    public RuleMatrixPacket(int _value, float _coefficient)
+    public RuleMatrixAxialFloat()
     {
-        value = _value;
-        coefficient = _coefficient;
+        matrix = new Dictionary<int, Dictionary<int, Dictionary<string, float>>>();
     }
 
-    public int Get() => value;
+    public void SetAtOnAxis(int x, int y, string axis, float value)
+    {
+        if (matrix[x] is null)
+        {
+            Dictionary<string, float> axisDict = new Dictionary<string, float>() { { axis, value } };
+            matrix[x] = new Dictionary<int, Dictionary<string, float>>() { { y, axisDict } }; // y level not initialized, initialize y level
+        }
+        else if (!matrix[x].ContainsKey(y))
+        {
+            matrix[x][y] = new Dictionary<string, float>() { { axis, value } }; // y level initialized, but [x][y] does not exist, add
+        }
+        else
+        {
+            matrix[x][y][axis] = value;
+        }
+    }
 
-    public float GetCoef() => value * coefficient;
+    public void AddAtOnAxis(int x, int y, string axis, float value)
+    {
+        if (matrix.ContainsKey(x))
+        {
+            if (matrix[x] is null)
+            {
+                Dictionary<string, float> axisDict = new Dictionary<string, float>() { { axis, value } };
+                matrix[x] = new Dictionary<int, Dictionary<string, float>>() { { y, axisDict } }; // y level not initialized, initialize y level
+            }
+            else if (!matrix[x].ContainsKey(y))
+            {
+                matrix[x][y] = new Dictionary<string, float>() { { axis, value } }; // y level initialized, but [x][y] does not exist, add
+            }
+            else if (!matrix[x][y].ContainsKey(axis))
+            {
+                matrix[x][y][axis] = value;
+            }
+            else
+            {
+                matrix[x][y][axis] += value;
+            }
+        }
+        else
+        {
+            Dictionary<string, float> axisDict = new Dictionary<string, float>() { { axis, value } };
+            matrix[x] = new Dictionary<int, Dictionary<string, float>>() { { y, axisDict } };
+        }
+    }
+
+    public float GetAtOnAxis(int x, int y, string axis) => ValueAndAxisExistAt(x, y, axis) ? matrix[x][y][axis] : -1f;
+    
+    private bool ValueAndAxisExistAt(int x, int y, string axis)
+    {
+        if (!matrix.ContainsKey(x)) return false;
+        
+        return matrix[x].ContainsKey(y) && matrix[x][y].ContainsKey(axis);
+
+    }
 }
 
 public readonly struct StorableRoadPacket
