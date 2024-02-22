@@ -20,7 +20,6 @@ public class RoadGeneration : MonoBehaviour
     [SerializeField] private bool useRules;
     [SerializeField] private int separation;
     [SerializeField] [Tooltip("Tendency for roads to continue along the same generationAxis it was generated on")] private int linearityCoefficient;
-    [SerializeField] [Range(0, 1)] private float curveCoefficient;
     [SerializeField] [Range(0, 1)] private float deltaCurveCoefficient;
     [SerializeField] private AnimationCurve linearityCurve;
     [Space] 
@@ -29,6 +28,8 @@ public class RoadGeneration : MonoBehaviour
 
     private RuleMatrixInteger separationMatrix;
     private RuleMatrixAxialFloat linearityMatrix;
+
+    private float curveCoefficient = 1f;
     
     [Space]
     
